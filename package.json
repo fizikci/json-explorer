@@ -1,9 +1,13 @@
 {
   "name": "json-explorer",
-  "publisher": "Bulent Keskin",
+  "publisher": "BulentKeskin",
   "displayName": "JSON Explorer",
+  "icon": "media/icon.png",
   "description": "Effortlessly explore, visualize, and interact with JSON data directly within VS Code",
-  "version": "0.0.1",
+  "version": "0.0.2",
+  "repository": {
+    "url": "https://github.com/fizikci/json-explorer"
+  },
   "engines": {
     "vscode": "^1.96.0"
   },
@@ -12,12 +16,6 @@
   ],
   "activationEvents": [],
   "main": "./out/extension.js",
-  "files": [
-      "media",
-      "out",
-      "src",
-      "package.json"
-  ],
   "contributes": {
     "menus": {
       "explorer/context": [

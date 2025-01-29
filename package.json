@@ -4,7 +4,7 @@
   "displayName": "JSON Explorer",
   "icon": "media/icon.png",
   "description": "Effortlessly explore, visualize, and interact with JSON data directly within VS Code",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "repository": {
     "url": "https://github.com/fizikci/json-explorer"
   },

@@ -62,7 +62,7 @@ function getWebviewContent(extensionPath: string, webview: vscode.Webview, jsonC
 async function generateCode(panel: vscode.WebviewPanel, input: string, output: string, language: string) {
     // Send the OpenAI streaming request
     try {
-        const apiKey = process.env.OPENAI_API_KEY; // Replace with your OpenAI API key
+        const apiKey = process.env.OPENAI_API_KEY;
 
         const system = `You are a code generator. You don't talk. You just output code. So, you will generate code for mapping one input object to another (output). You will read each field of the input and try to set it to a proper field on the other object. Assume that we have perfect ${language} classes for both sides. Don't worry about them. Do not create them. They are already created. You just generate the mapping code from input to output.`;
         console.log("system: " + system);
@@ -101,9 +101,9 @@ async function generateCode(panel: vscode.WebviewPanel, input: string, output: s
                 .filter((line: string) => line.trim().startsWith("data:"));
 
             for (const line of lines) {
-                const content = line.slice(5).trim(); // Remove "data: " prefix
+                const content = line.slice(5).trim();
                 if (content === "[DONE]") {
-                    panel.webview.postMessage({ content: "\n\n[Stream ended]" });
+                    //panel.webview.postMessage({ content: "\n\n[Stream ended]" });
                     return;
                 }
 
@@ -117,7 +117,7 @@ async function generateCode(panel: vscode.WebviewPanel, input: string, output: s
         });
 
         response.data.on("end", () => {
-            panel.webview.postMessage({ content: "\n\n[Stream ended]" });
+            //panel.webview.postMessage({ content: "\n\n[Stream ended]" });
         });
 
         response.data.on("error", (err: any) => {

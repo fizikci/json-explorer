@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="en" ng-app="jsonViewerApp">
+<head>
+    <meta charset="UTF-8">
+    <script src="ANGULAR_URI"></script>
+	<script>
+const vscode = acquireVsCodeApi();
+vscode.setState(vscode.getState() || []);
+var jsonContent = JSON_CONTENT;
+
+// Reusable Popup Component
+function showPopup(title, content, actions) {
+    const existingPopup = document.getElementById('json-explorer-popup');
+    if (existingPopup) existingPopup.remove();
+
+    const popup = document.createElement('div');
+    popup.id = 'json-explorer-popup';
+    popup.innerHTML = `
+        <div class="popup-overlay"></div>
+        <div class="popup-dialog">
+            <div class="popup-header">${title}</div>
+            <div class="popup-content">${content}</div>
+            <div class="popup-footer">
+                ${actions.map(action => `<button class="popup-btn" data-action="${action.id}">${action.label}</button>`).join('')}
+            </div>
+        </div>
+    `;
+    document.body.appendChild(popup);
+
+    popup.querySelectorAll('.popup-btn').forEach(button => {
+        button.addEventListener('click', event => {
+            const actionId = event.target.getAttribute('data-action');
+            const action = actions.find(a => a.id === actionId);
+            if (action && action.onClick) action.onClick();
+        });
+    });
+
+    popup.querySelector('.popup-overlay').addEventListener('click', () => {
+        popup.remove();
+    });
+}
+
+function showStructure(path){
+    var obj = getValueFromPath(path);
+    document.querySelector('.popup-content').innerHTML = `<textarea>${JSON.stringify(getJsonStructure(obj), null, 2)}</textarea>`;
+}
+function generateCode(path){
+    const json = getValueFromPath(path);
+    const input = JSON.stringify(getJsonStructure(json), null, 2);
+    const textarea = document.querySelector('textarea');
+    const output = textarea.value;
+
+    if(input === output){
+        vscode.postMessage({command:'toast', msg:'Write the output model to generate mapping code...'});
+        return;
+    }
+
+    vscode.postMessage({ command: 'generateCode', input: input, output: output, language:'C#' });
+    textarea.value = '';
+}
+function copy(){
+    navigator.clipboard.writeText(document.querySelector('.popup-content textarea').value); 
+    vscode.postMessage({command:'toast', msg:'Copied...'})
+}
+
+function getJsonStructure(json) {
+    function determineStructure(value) {
+        if (Array.isArray(value)) {
+            // Process the first item of the array or mark it as empty
+            return value.length > 0 ? [determineStructure(value[0])] : [];
+        } else if (value !== null && typeof value === "object") {
+            // Process nested objects recursively
+            return Object.keys(value).filter(k=>k!='$$hashKey').reduce((acc, key) => {
+                acc[key] = determineStructure(value[key]);
+                return acc;
+            }, {});
+        } else {
+            // Return the type as a string for primitives
+            return typeof value;
+        }
+    }
+
+    return determineStructure(json);
+}
+function getValueFromPath(path) {
+    // Split the path by dots and square brackets
+    const pathParts = path.split(/\.|\[|\]/).filter(part => part);
+
+    // Traverse the object based on the path
+    return pathParts.reduce((acc, key) => {
+        // If acc is undefined or null, stop the traversal
+        if (acc === undefined || acc === null) {
+            return undefined;
+        }
+        // Convert key to number if it's a valid array index
+        const index = Number(key);
+        return isNaN(index) ? acc[key] : acc[index];
+    }, jsonContent);
+}
+function normalizeArrayStructure(obj) {
+    if (Array.isArray(obj)) {
+        let allKeys = new Set();
+
+        // Collect all keys from objects in the array
+        obj.forEach(item => {
+            if (typeof item === 'object' && item !== null) {
+                Object.keys(item).forEach(key => allKeys.add(key));
+            }
+        });
+
+        // Normalize objects in the array
+        obj.forEach(item => {
+            if (typeof item === 'object' && item !== null) {
+                allKeys.forEach(key => {
+                    if (!(key in item)) {
+                        item[key] = null;
+                    }
+                });
+            }
+        });
+    } else if (typeof obj === 'object' && obj !== null) {
+        // Recursively process object properties
+        Object.keys(obj).forEach(key => {
+            obj[key] = normalizeArrayStructure(obj[key]);
+        });
+    }
+    return obj;
+}
+
+window.addEventListener('message', event => {
+    const textarea = document.querySelector('textarea');
+    const message = event.data;
+    if (message.content) {
+        textarea.value += message.content;
+        textarea.scrollTop = textarea.scrollHeight;
+    }
+});
+
+angular.module('jsonViewerApp', [])
+    .controller('jsonViewerController', function ($scope, $timeout) {
+        $scope.parsedJSON = {};
+
+        $scope.initialize = function () {
+            $scope.parsedJSON = normalizeArrayStructure(jsonContent);
+        };
+
+		$timeout(function() {
+			let state = vscode.getState();
+			vscode.setState([]);
+			for(let i = 0; i < state.length; i++){
+				let key = state[i];
+				let q = key ? '[data-key="' + key.split('.').join('"] [data-key="') + '"]' : '';
+				let cmd = document.querySelector(q + ' .cmd');
+				if(cmd) cmd.click();
+			}
+		});
+    })
+    .directive('jsonGrid', function () {
+        return {
+            restrict: 'E',
+            scope: {
+                data: '='
+            },
+            template: `
+                <div>
+                    <!-- value display -->
+                    <div ng-if="isValue(data)">
+                        {{ data }}
+                    </div>
+
+                    <!-- Collapsible object display -->
+                    <div ng-if="isObject(data)">
+                        <div class="label field cmd" ng-click="toggleVisibility($event)">
+                            {{ count(data) }} fields
+                            <span ng-if="!isVisible">[+]</span>
+                            <span ng-if="isVisible">[-]</span>
+                        </div>
+                        <div ng-show="isVisible">
+                            <table>
+                                <tbody>
+                                    <tr ng-repeat="(key, value) in data track by key">
+                                        <td class="key" ng-dblclick="onFieldDblClick($event, key)">{{ key }}</td>
+                                        <td data-key="{{key}}">
+                                            <json-grid data="value"></json-grid>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    
+                    <!-- Collapsible array display -->
+                    <div ng-if="isArray(data) && data.length && (isValue(data[0]) || isArray(data[0]))">
+                        <div class="label row cmd" ng-click="toggleVisibility($event)">
+                            {{ data.length }} rows 
+                            <span ng-if="!isVisible">[+]</span>
+                            <span ng-if="isVisible">[-]</span>
+                        </div>
+                        <div ng-show="isVisible">
+                            <table>
+                                <tbody>
+                                    <tr ng-repeat="row in data | limitTo: dataLimit" data-key="{{$index}}">
+                                        <td>{{$index}}</td>
+                                        <td ng-dblclick="onFieldDblClick($event, '')">
+                                            <json-grid data="row"></json-grid>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                            <span style="cursor:pointer" ng-if="data.length > dataLimit" ng-click="releaseLimit(data.length)">See all...</span>
+                        </div>
+                    </div>
+
+                    <!-- Collapsible array display -->
+                    <div ng-if="isArray(data) && data.length && isObject(data[0])">
+                        <div class="label row cmd" ng-click="toggleVisibility($event)">
+                            {{ data.length }} rows 
+                            <span ng-if="!isVisible">[+]</span>
+                            <span ng-if="isVisible">[-]</span>
+                        </div>
+                        <a class="hidden-column" ng-repeat="hiddenColumn in hiddenColumns track by hiddenColumn" href="" ng-click="restoreColumn($event, hiddenColumn)" data-key="{{hiddenColumn}}">{{ hiddenColumn }}</a>
+                        <div ng-show="isVisible">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th></th>
+                                        <th ng-repeat="(field, val) in data[0] track by field" ng-if="visibleColumns[field]" data-key="{{field}}">
+										<span ng-click="sortBy(field)">{{ field }}</span>
+										<span class="hide-btn cmd" ng-click="hideColumn($event, field)">[-]</span>
+                                        </th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr ng-repeat="row in data | limitTo: dataLimit | orderBy:sortField:reverseSort" data-key="{{$index}}">
+                                        <td>{{$index}}</td>
+                                        <td ng-show="visibleColumns[field] && isValue(row)" ng-dblclick="onFieldDblClick($event, '')">
+                                            {{ row }}
+                                        </td>
+                                        <td ng-repeat="(field, val) in data[0] track by field" ng-show="visibleColumns[field] && isObject(row)" data-key="{{field}}" ng-dblclick="onFieldDblClick($event, '')">
+                                            <json-grid data="row[field]"></json-grid>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                            <span style="cursor:pointer" ng-if="data.length > dataLimit" ng-click="releaseLimit(data.length)">See all...</span>
+                        </div>
+                    </div>
+                </div>
+            `,
+            link: function (scope) {
+                scope.isVisible = false; // Initially hidden
+                scope.hiddenColumns = []; // Track hidden columns
+                scope.dataLimit = 10; // Limit rows to show
+
+                scope.releaseLimit = function (length) {
+                    scope.dataLimit = length;
+                };
+
+                // Helper to get key path from the clicked element
+                function getKeyPath(element) {
+                    let keyPath = '';
+                    let currentElement = element;
+
+                    while (currentElement) {
+                        let key = currentElement.getAttribute('data-key');
+                        if (key) {
+                            keyPath = key + (keyPath ? '.' : '') + keyPath;
+                        }
+                        currentElement = currentElement.parentElement;
+                    }
+
+                    return keyPath;
+                }
+
+                scope.toggleVisibility = function (event) {
+                    const keyPath = getKeyPath(event.target);
+					if(scope.isVisible) vscode.setState(vscode.getState().filter(k => !k.startsWith(keyPath)));
+					else vscode.setState([...vscode.getState(), keyPath]);
+
+					scope.isVisible = !scope.isVisible;
+                };
+
+                scope.sortField = null;
+                scope.reverseSort = false;
+                scope.visibleColumns = {};
+
+                scope.isValue = function (val) {
+                    return typeof val == 'number' || typeof val == 'string' || typeof val == 'boolean' || val === null;
+                };
+
+                scope.isArray = function (val) {
+                    return Array.isArray(val);
+                };
+
+                scope.isObject = function (val) {
+                    return !scope.isValue(val) && !Array.isArray(val);
+                };
+
+                scope.count = function (val) {
+                    return val ? Object.keys(val).length : null;
+                };
+
+                scope.sortBy = function (field) {
+                    if (scope.sortField === field) {
+                        scope.reverseSort = !scope.reverseSort;
+                    } else {
+                        scope.sortField = field;
+                        scope.reverseSort = false;
+                    }
+                };
+
+                scope.hideColumn = function (event, field) {
+                    const keyPath = getKeyPath(event.target);
+					vscode.setState([...vscode.getState(), keyPath]);
+
+                    if (scope.visibleColumns[field]) {
+                        scope.visibleColumns[field] = false;
+                        scope.hiddenColumns.push(field);
+                    }
+                };
+
+                scope.restoreColumn = function (event, field) {
+                    const keyPath = getKeyPath(event.target);
+					vscode.setState(vscode.getState().filter(k => !k.startsWith(keyPath)));
+
+                    const index = scope.hiddenColumns.indexOf(field);
+                    if (index > -1) {
+                        scope.hiddenColumns.splice(index, 1);
+                        scope.visibleColumns[field] = true;
+                    }
+                };
+
+                scope.initializeColumns = function (data) {
+                    if (Array.isArray(data) && data.length > 0) {
+                        for (const key in data[0]) {
+                            scope.visibleColumns[key] = true;
+                        }
+                    }
+                };
+
+                scope.onFieldDblClick = function (event, key) {
+                    event.stopPropagation();
+                    let path = getKeyPath(event.target) + (key?'.'+ key:'');
+                    path = path.replace(/\.(\d+)/g, '[$1]');
+                    const content = `<textarea>${path}</textarea>`;
+                    showPopup('JSON Explorer', content, [
+                        { id: 'structure', label: 'Structure', onClick: () => {showStructure(path)} },
+                        { id: 'generate', label: 'Generate Mapping Code', onClick: () => {generateCode(path)} },
+                        { id: 'copy', label: 'Copy', onClick: () => {copy()} },
+                        { id: 'close', label: 'Close', onClick: () => document.getElementById('json-explorer-popup').remove() }
+                    ]);
+                };
+                
+                scope.$watch('data', function (newValue) {
+                    scope.initializeColumns(newValue);
+                });
+            }
+        };
+    });
+	</script>
+    <style>
+        .label, a.hidden-column {
+            cursor:pointer;
+            border-radius: 10px;
+            display:inline-block;
+            color: white;
+            padding: 1px 10px;
+            font-family: 'Lucida Sans', 'Lucida Sans Regular', 'Lucida Grande', 'Lucida Sans Unicode', Geneva, Verdana, sans-serif;
+            white-space: nowrap;
+            text-decoration: none;
+        }
+        .row {
+            background: #179fff
+        }
+        .field {
+            background: #cc6d2e
+        }
+        table {
+            border-collapse: collapse;
+        }
+
+        th, td {
+            border: 1px solid #ddd;
+			color:#999;
+            padding: 2px;
+            text-align: left;
+            vertical-align: top;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        th span {
+            cursor: pointer;
+            font-weight: normal;
+        }
+
+        .key, th {
+            color: #45a3dc
+        }
+
+        a.hidden-column {
+            background: rgb(126, 126, 126);
+            font-size: smaller;
+        }
+        /* Popup Styles */
+        .popup-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 72%);
+            z-index: 1000;
+        }
+
+        .popup-dialog {
+            position: fixed;
+            top: 20%;
+            left: 20%;
+            background: black;
+            color:gray;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+            z-index: 1001;
+            max-width: 90%;
+            bottom: 20%;
+            right: 20%;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .popup-header {
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+
+        .popup-content {
+            margin-bottom: 20px;
+            font-family: monospace;
+            white-space: pre-wrap;
+            flex-grow: 1;
+        }
+
+        .popup-content textarea {
+            display:block;
+            width:100%;
+            height:100%;
+            background-color: #ffffff08;
+            overflow: auto;
+            color: white;
+        }
+
+        .popup-footer {
+            display: flex;
+            justify-content: right;
+        }
+
+        .popup-btn {
+            padding: 5px 10px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-left: 20px;
+            background-color: #007acc;
+            color: white;
+        }
+
+        .popup-btn[data-action="close"] {
+            background-color: #f44336;
+            color: white;
+        }
+    </style>
+</head>
+<body ng-controller="jsonViewerController">
+    <div ng-if="!parsedJSON">Problem loading the document. Is it a valid JSON?</div>
+    <div ng-init="initialize()">
+        <json-grid data="parsedJSON"></json-grid>
+    </div>
+</body>
+</html>

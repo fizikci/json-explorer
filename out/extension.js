@@ -32,12 +32,16 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.activate = activate;
 exports.deactivate = deactivate;
 const vscode = __importStar(require("vscode"));
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
+const axios_1 = __importDefault(require("axios"));
 function activate(context) {
     context.subscriptions.push(vscode.commands.registerCommand('jsonExplorer.openWith', async (uri) => {
         // Read the JSON file content
@@ -55,287 +59,83 @@ function activate(context) {
         });
         // Send the JSON content to the webview
         panel.webview.html = getWebviewContent(context.extensionPath, panel.webview, jsonContent);
+        // Handle messages from the webview
+        panel.webview.onDidReceiveMessage(async (message) => {
+            if (message.command === 'toast') {
+                vscode.window.showInformationMessage(message.msg);
+            }
+            if (message.command === 'generateCode') {
+                await generateCode(panel, message.input, message.output, message.language);
+            }
+        });
     }));
 }
 function deactivate() { }
 // Helper to generate webview HTML
 function getWebviewContent(extensionPath, webview, jsonContent) {
     const angularUri = webview.asWebviewUri(vscode.Uri.file(path.join(extensionPath, 'media', 'angular.min.js')));
-    return `
-<!DOCTYPE html>
-<html lang="en" ng-app="jsonViewerApp">
-<head>
-    <meta charset="UTF-8">
-    <script src="${angularUri}"></script>
-	<script>
-const vscode = acquireVsCodeApi();
-vscode.setState(vscode.getState() || []);
-var jsonContent = \`${jsonContent.replace(/`/g, '\\`').replace(/\\/g, '\\\\')}\`;
-angular.module('jsonViewerApp', [])
-    .controller('jsonViewerController', function ($scope, $timeout) {
-        $scope.parsedJSON = {};
-
-        $scope.initialize = function () {
-            try {
-                $scope.parsedJSON = JSON.parse(jsonContent);
-            } catch (e) {
-                $scope.error = 'Invalid JSON format.';
-            }
-        };
-
-		$timeout(function() {
-			let state = vscode.getState();
-			vscode.setState([]);
-			for(let i = 0; i < state.length; i++){
-				let key = state[i];
-				let q = key ? '[data-key="' + key.split('.').join('"] [data-key="') + '"]' : '';
-				let cmd = document.querySelector(q + ' .cmd');
-				if(cmd) cmd.click();
-			}
-		});
-    })
-    .directive('jsonGrid', function () {
-        return {
-            restrict: 'E',
-            scope: {
-                data: '='
+    const indexHtmlPath = path.join(extensionPath, 'media', 'index.html');
+    const htmlContent = fs.readFileSync(indexHtmlPath, 'utf8');
+    return htmlContent
+        .replace('ANGULAR_URI', angularUri.toString())
+        .replace('JSON_CONTENT', jsonContent.replace(/`/g, '\\`').replace(/\\/g, '\\\\'));
+}
+// Helper to generate code
+async function generateCode(panel, input, output, language) {
+    // Send the OpenAI streaming request
+    try {
+        const apiKey = process.env.OPENAI_API_KEY; // Replace with your OpenAI API key
+        const system = `You are a code generator. You don't talk. You just output code. So, you will generate code for mapping one input object to another (output). You will read each field of the input and try to set it to a proper field on the other object. Assume that we have perfect ${language} classes for both sides. Don't worry about them. Do not create them. They are already created. You just generate the mapping code from input to output.`;
+        console.log("system: " + system);
+        const user = `Here is the input structure:\n\n${input}\n\nHere is the output structure:\n\n${output}`;
+        console.log("user: " + user);
+        const response = await axios_1.default.post("https://api.openai.com/v1/chat/completions", {
+            model: "gpt-4o",
+            messages: [
+                { role: "system", content: system },
+                { role: "user", content: user }
+            ],
+            temperature: 0.5,
+            max_completion_tokens: 8192,
+            top_p: 1,
+            frequency_penalty: 0,
+            presence_penalty: 0,
+            stream: true
+        }, {
+            headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${apiKey}`,
             },
-            template: \`
-                <div>
-                    <!-- Error display -->
-                    <div ng-if="error" class="error-banner">{{ error }}</div>
-
-                    <!-- Collapsible object display -->
-                    <div ng-if="isObject(data) && !error">
-                        <div class="label field cmd" ng-click="toggleVisibility($event)">
-                            {{ count(data) }} fields
-                            <span ng-if="!isVisible">[+]</span>
-                            <span ng-if="isVisible">[-]</span>
-                        </div>
-                        <div ng-show="isVisible">
-                            <table>
-                                <tbody>
-                                    <tr ng-repeat="(key, value) in data track by key">
-                                        <td class="key">{{ key }}</td>
-                                        <td data-key="{{key}}">
-                                            <div ng-if="isValue(value)">{{ value }}</div>
-                                            <json-grid ng-if="isArray(value) || isObject(value)" data="value"></json-grid>
-                                        </td>
-                                    </tr>
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                    
-                    <!-- Collapsible array display -->
-                    <div ng-if="isArray(data) && data.length && isValue(data[0]) && !error">
-                        <div class="label row cmd" ng-click="toggleVisibility($event)">
-                            {{ data.length }} rows 
-                            <span ng-if="!isVisible">[+]</span>
-                            <span ng-if="isVisible">[-]</span>
-                        </div>
-                        <div ng-show="isVisible">
-                            <table>
-                                <tbody>
-                                    <tr ng-repeat="row in data" data-key="{{$index}}">
-                                        <td>{{$index}}</td>
-                                        <td>
-                                            {{ row }}
-                                        </td>
-                                    </tr>
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-
-                    <!-- Collapsible array display -->
-                    <div ng-if="isArray(data) && data.length && isObject(data[0]) && !error">
-                        <div class="label row cmd" ng-click="toggleVisibility($event)">
-                            {{ data.length }} rows 
-                            <span ng-if="!isVisible">[+]</span>
-                            <span ng-if="isVisible">[-]</span>
-                        </div>
-                        <a class="hidden-column" ng-repeat="hiddenColumn in hiddenColumns track by hiddenColumn" href="" ng-click="restoreColumn($event, hiddenColumn)" data-key="{{hiddenColumn}}">{{ hiddenColumn }}</a>
-                        <div ng-show="isVisible">
-                            <table>
-                                <thead>
-                                    <tr>
-                                        <th></th>
-                                        <th ng-repeat="(field, val) in data[0] track by field" ng-if="visibleColumns[field]" data-key="{{field}}">
-										<span ng-click="sortBy(field)">{{ field }}</span>
-										<span class="hide-btn cmd" ng-click="hideColumn($event, field)">[-]</span>
-                                        </th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    <tr ng-repeat="row in data | orderBy:sortField:reverseSort" data-key="{{$index}}">
-                                        <td>{{$index}}</td>
-                                        <td ng-show="visibleColumns[field] && isValue(row)">
-                                            {{ row }}
-                                        </td>
-                                        <td ng-repeat="(field, val) in row track by field" ng-show="visibleColumns[field] && isObject(row)" data-key="{{field}}">
-                                            <div ng-if="isValue(val)">{{ val }}</div>
-                                            <json-grid ng-if="isArray(val) || isObject(val)" data="val"></json-grid>
-                                        </td>
-                                    </tr>
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                </div>
-            \`,
-            link: function (scope) {
-                scope.isVisible = false; // Initially hidden
-                scope.hiddenColumns = []; // Track hidden columns
-
-                // Helper to get key path from the clicked element
-                function getKeyPath(element) {
-                    let keyPath = '';
-                    let currentElement = element;
-
-                    while (currentElement) {
-                        let key = currentElement.getAttribute('data-key');
-                        if (key) {
-                            keyPath = key + (keyPath ? '.' : '') + keyPath;
-                        }
-                        currentElement = currentElement.parentElement;
-                    }
-
-                    return keyPath;
+            responseType: "stream",
+        });
+        // Handle streaming response
+        response.data.on("data", (chunk) => {
+            const lines = chunk
+                .toString()
+                .split("\n")
+                .filter((line) => line.trim().startsWith("data:"));
+            for (const line of lines) {
+                const content = line.slice(5).trim(); // Remove "data: " prefix
+                if (content === "[DONE]") {
+                    panel.webview.postMessage({ content: "\n\n[Stream ended]" });
+                    return;
                 }
-
-                scope.toggleVisibility = function (event) {
-                    const keyPath = getKeyPath(event.target);
-					if(scope.isVisible) vscode.setState(vscode.getState().filter(k => !k.startsWith(keyPath)));
-					else vscode.setState([...vscode.getState(), keyPath]);
-
-					scope.isVisible = !scope.isVisible;
-                };
-
-                scope.sortField = null;
-                scope.reverseSort = false;
-                scope.visibleColumns = {};
-
-                scope.isValue = function (val) {
-                    return typeof val == 'number' || typeof val == 'string' || typeof val == 'boolean' || val === null;
-                };
-
-                scope.isArray = function (val) {
-                    return Array.isArray(val);
-                };
-
-                scope.isObject = function (val) {
-                    return !scope.isValue(val) && !Array.isArray(val);
-                };
-
-                scope.count = function (val) {
-                    return Object.keys(val).length;
-                };
-
-                scope.sortBy = function (field) {
-                    if (scope.sortField === field) {
-                        scope.reverseSort = !scope.reverseSort;
-                    } else {
-                        scope.sortField = field;
-                        scope.reverseSort = false;
-                    }
-                };
-
-                scope.hideColumn = function (event, field) {
-                    const keyPath = getKeyPath(event.target);
-					vscode.setState([...vscode.getState(), keyPath]);
-
-                    if (scope.visibleColumns[field]) {
-                        scope.visibleColumns[field] = false;
-                        scope.hiddenColumns.push(field);
-                    }
-                };
-
-                scope.restoreColumn = function (event, field) {
-                    const keyPath = getKeyPath(event.target);
-					vscode.setState(vscode.getState().filter(k => !k.startsWith(keyPath)));
-
-                    const index = scope.hiddenColumns.indexOf(field);
-                    if (index > -1) {
-                        scope.hiddenColumns.splice(index, 1);
-                        scope.visibleColumns[field] = true;
-                    }
-                };
-
-                scope.initializeColumns = function (data) {
-                    if (Array.isArray(data) && data.length > 0) {
-                        for (const key in data[0]) {
-                            scope.visibleColumns[key] = true;
-                        }
-                    }
-                };
-                
-                scope.$watch('data', function (newValue) {
-                    scope.initializeColumns(newValue);
-                });
+                const json = JSON.parse(content);
+                const delta = json.choices[0]?.delta?.content;
+                if (delta) {
+                    panel.webview.postMessage({ content: delta });
+                }
             }
-        };
-    });
-	</script>
-    <style>
-        .label, a.hidden-column {
-            cursor:pointer;
-            border-radius: 10px;
-            display:inline-block;
-            color: white;
-            padding: 1px 10px;
-            font-family: 'Lucida Sans', 'Lucida Sans Regular', 'Lucida Grande', 'Lucida Sans Unicode', Geneva, Verdana, sans-serif;
-            white-space: nowrap;
-            text-decoration: none;
-        }
-        .row {
-            background: #179fff
-        }
-        .field {
-            background: #cc6d2e
-        }
-        .error-banner {
-            color: white;
-            background-color: red;
-            padding: 10px;
-            margin-bottom: 10px;
-            border-radius: 5px;
-            font-family: Arial, sans-serif;
-        }
-        table {
-            border-collapse: collapse;
-        }
-
-        th, td {
-            border: 1px solid #ddd;
-			color:#999;
-            padding: 2px;
-            text-align: left;
-            vertical-align: top;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        }
-
-        th span {
-            cursor: pointer;
-            font-weight: normal;
-        }
-
-        .key, th {
-            color: #45a3dc
-        }
-
-        a.hidden-column {
-            background: rgb(126, 126, 126);
-            font-size: smaller;
-        }
-    </style>
-</head>
-<body ng-controller="jsonViewerController">
-    <div ng-init="initialize()">
-        <json-grid data="parsedJSON"></json-grid>
-    </div>
-</body>
-</html>
-    `;
+        });
+        response.data.on("end", () => {
+            panel.webview.postMessage({ content: "\n\n[Stream ended]" });
+        });
+        response.data.on("error", (err) => {
+            vscode.window.showErrorMessage("Stream error: " + err.message);
+        });
+    }
+    catch (error) {
+        vscode.window.showErrorMessage("Failed to fetch code: " + error.message);
+    }
 }
 //# sourceMappingURL=extension.js.map

@@ -55,7 +55,7 @@ function getWebviewContent(extensionPath: string, webview: vscode.Webview, jsonC
 
     return htmlContent
         .replace('ANGULAR_URI', angularUri.toString())
-        .replace('JSON_CONTENT', jsonContent.replace(/`/g, '\\`').replace(/\\/g, '\\\\'));
+        .replace('JSON_CONTENT', jsonContent);
 }
 
 // Helper to generate code

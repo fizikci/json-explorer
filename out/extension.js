@@ -78,7 +78,7 @@ function getWebviewContent(extensionPath, webview, jsonContent) {
     const htmlContent = fs.readFileSync(indexHtmlPath, 'utf8');
     return htmlContent
         .replace('ANGULAR_URI', angularUri.toString())
-        .replace('JSON_CONTENT', jsonContent.replace(/`/g, '\\`').replace(/\\/g, '\\\\'));
+        .replace('JSON_CONTENT', jsonContent);
 }
 // Helper to generate code
 async function generateCode(panel, input, output, language) {
